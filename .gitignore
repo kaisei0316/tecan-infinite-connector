@@ -1,0 +1,31 @@
+# Python build and cache files
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+env/
+.venv/
+venv/
+
+# Logs written by the connector
+logs/
+*.log
+
+# Measurement results from scripts/read_fluorescence.py
+results/
+
+# Claude Code conversation exports (may contain personal details)
+*-try-import-pylabrobot.txt
+
+# Local configuration: has this machine's server UUID and, later, the
+# UniteLabs connection details. Start from config.example.json instead.
+config.json
+
+# Certificates and private keys must never be committed.
+*.pem
+*.key
+*.crt
+*.p12

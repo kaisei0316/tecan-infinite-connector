@@ -1,0 +1,28 @@
+{
+  "sila_server": {
+    "hostname": "0.0.0.0",
+    "port": 50052,
+    "tls": false,
+    "require_client_auth": false,
+    "root_certificates": null,
+    "certificate_chain": null,
+    "private_key": null,
+    "options": {},
+    "uuid": "00000000-0000-0000-0000-000000000000",
+    "name": "Tecan Infinite 200 PRO",
+    "type": "PlateReader",
+    "description": "Tecan Infinite F200 PRO plate reader (drawer control, status, fluorescence) via pylabrobot.",
+    "vendor_url": "https://www.riken.jp",
+    "default_lifetime": 3600.0
+  },
+  "cloud_servers": {
+    "enabled": true,
+    "endpoints": []
+  },
+  "discovery": {
+    "ip_version": "ipv4",
+    "network_interfaces": null,
+    "certificate": null
+  },
+  "logging": null
+}
