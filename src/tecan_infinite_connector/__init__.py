@@ -8,7 +8,7 @@ import dataclasses
 from unitelabs.cdk import Connector, ConnectorBaseConfig, SiLAServerConfig
 
 from .driver import InfiniteDriver
-from .features import DrawerController, FluorescenceReader, InstrumentStatusProvider
+from .features import AbsorbanceReader, DrawerController, FluorescenceReader, InstrumentStatusProvider
 
 __version__ = "0.1.0"
 
@@ -21,7 +21,7 @@ class InfiniteConfig(ConnectorBaseConfig):
         default_factory=lambda: SiLAServerConfig(
             name="Tecan Infinite 200 PRO",
             type="PlateReader",
-            description="Tecan Infinite F200 PRO plate reader (drawer control, status, fluorescence) via pylabrobot.",
+            description="Tecan Infinite F200 PRO plate reader (drawer control, status, fluorescence, absorbance) via pylabrobot.",
             version=__version__,
             vendor_url="https://www.riken.jp",
         )
@@ -40,6 +40,7 @@ async def create_app(config: InfiniteConfig):
     app.register(DrawerController(reader))
     app.register(InstrumentStatusProvider(reader))
     app.register(FluorescenceReader(reader))
+    app.register(AbsorbanceReader(reader))
 
     yield app
 

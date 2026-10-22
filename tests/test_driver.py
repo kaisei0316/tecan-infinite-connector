@@ -11,7 +11,12 @@ from unitelabs.cdk import Connector
 
 from tecan_infinite_connector import InfiniteConfig
 from tecan_infinite_connector.driver import FilterNotInstalledError, InfiniteDriver
-from tecan_infinite_connector.features import DrawerController, FluorescenceReader, InstrumentStatusProvider
+from tecan_infinite_connector.features import (
+    AbsorbanceReader,
+    DrawerController,
+    FluorescenceReader,
+    InstrumentStatusProvider,
+)
 
 # Replies recorded from the real reader on 2026-10-21 (values in tenths of a nm).
 FILTER_REPLIES = {
@@ -38,6 +43,7 @@ class FakeBackend:
         self.io = FakeIO()
         self.calls = []
         self.fluorescence_kwargs = None
+        self.absorbance_kwargs = None
 
     async def setup(self):
         self.calls.append("setup")
@@ -54,6 +60,10 @@ class FakeBackend:
     async def read_fluorescence(self, **kwargs):
         self.fluorescence_kwargs = kwargs
         return [{"data": [[float(row * 12 + column) for column in range(12)] for row in range(8)]}]
+
+    async def read_absorbance(self, **kwargs):
+        self.absorbance_kwargs = kwargs
+        return [{"data": [[0.1 * column for column in range(12)] for _ in range(8)]}]
 
     async def _send_command(self, command, allow_timeout=False):
         return FILTER_REPLIES.get(command, ["ST"])
@@ -96,6 +106,22 @@ class DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(backend.fluorescence_kwargs["excitation_bandwidth"], 200)  # 20 nm
         self.assertEqual(backend.fluorescence_kwargs["emission_bandwidth"], 250)  # 25 nm
 
+    async def test_absorbance_accepts_installed_filter_with_its_bandwidth(self):
+        reader, backend = await connected_driver()
+
+        table = await reader.read_absorbance(580, flashes=25)
+
+        self.assertEqual(len(table), 8)
+        self.assertEqual(backend.absorbance_kwargs["wavelength"], 580)
+        self.assertEqual(backend.absorbance_kwargs["bandwidth"], 20.0)  # nm
+
+    async def test_absorbance_rejects_uninstalled_wavelength_without_touching_reader(self):
+        reader, backend = await connected_driver()
+
+        with self.assertRaises(FilterNotInstalledError):
+            await reader.read_absorbance(600, flashes=25)
+        self.assertIsNone(backend.absorbance_kwargs)
+
     async def test_drawer_moves_only_when_needed(self):
         reader, backend = await connected_driver()
 
@@ -112,11 +138,11 @@ class FeatureDefinitionTests(unittest.IsolatedAsyncioTestCase):
     async def test_features_register(self):
         reader, _ = await connected_driver()
         app = Connector(InfiniteConfig())
-        for feature in (DrawerController, InstrumentStatusProvider, FluorescenceReader):
+        for feature in (DrawerController, InstrumentStatusProvider, FluorescenceReader, AbsorbanceReader):
             app.register(feature(reader))
 
         registered = {str(identifier) for identifier in app.sila_server.features}
-        for name in ("DrawerController", "InstrumentStatusProvider", "FluorescenceReader"):
+        for name in ("DrawerController", "InstrumentStatusProvider", "FluorescenceReader", "AbsorbanceReader"):
             self.assertIn(f"jp.riken/platereading/{name}/v1", registered)
 
 

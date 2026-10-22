@@ -5,8 +5,8 @@ This module knows nothing about SiLA. It wraps pylabrobot's experimental
 
 - Only one operation runs on the reader at a time (an `asyncio.Lock`).
 - The drawer state is remembered, because the reader is not asked for it.
-- The installed filters are read once at startup, and every fluorescence read
-  is checked against them.
+- The installed filters are read once at startup, and every fluorescence and
+  absorbance read is checked against them.
 
 Reader quirks this module works around (found by testing on the real reader):
 
@@ -15,6 +15,8 @@ Reader quirks this module works around (found by testing on the real reader):
   comes, so drawer moves are skipped when the drawer is already in place.
 - Asking for a filter that is not installed makes the reader stop responding,
   so wavelengths are validated before anything is sent to the reader.
+- Absorbance light comes from the excitation filter slide: the F200 PRO has no
+  monochromator, so only the installed filter wavelengths and bandwidths work.
 
 Units used by the reader's protocol: wavelengths and bandwidths are sent and
 received in tenths of a nanometer (e.g. 4850 means 485.0 nm).
@@ -122,8 +124,8 @@ class InfiniteDriver:
             FilterNotInstalledError: A wavelength does not match an installed filter.
                 Checked before anything is sent to the reader.
         """
-        excitation_filter = self._find_filter(self.excitation_filters, excitation_nm, "excitation")
-        emission_filter = self._find_filter(self.emission_filters, emission_nm, "emission")
+        excitation_filter = self._find_filter(self.excitation_filters, excitation_nm, "fluorescence excitation")
+        emission_filter = self._find_filter(self.emission_filters, emission_nm, "fluorescence emission")
 
         # The plate definition only tells pylabrobot where the wells are. Standard
         # 96-well plates share the same layout, so this Corning definition fits them.
@@ -145,6 +147,40 @@ class InfiniteDriver:
                         # match the installed filter or the reader stops responding.
                         excitation_bandwidth=round(excitation_filter.bandwidth_nm * 10),
                         emission_bandwidth=round(emission_filter.bandwidth_nm * 10),
+                    )
+                )
+            finally:
+                self.drawer_open = False  # Every read ends by pulling the drawer in.
+        return results[0]["data"]
+
+    async def read_absorbance(self, wavelength_nm: int, flashes: int) -> list[list[float | None]]:
+        """Read the absorbance of all 96 wells, using an excitation filter as the light source.
+
+        This is the filter-based F200 PRO, so only the wavelengths of the installed
+        excitation filters are possible. The reader accepts them for absorbance even
+        though they are labeled for fluorescence ("FI").
+
+        Returns:
+            An 8 x 12 table of absorbance values (OD): one list per row (A to H),
+            each holding the values for columns 1 to 12.
+
+        Raises:
+            FilterNotInstalledError: The wavelength does not match an installed filter.
+                Checked before anything is sent to the reader.
+        """
+        optical_filter = self._find_filter(self.excitation_filters, wavelength_nm, "excitation", usage=None)
+        plate = cor_96_wellplate_360uL_Fb(name="plate")
+
+        async with self._lock:
+            try:
+                results = await self._run_on_reader(
+                    self.backend.read_absorbance(
+                        plate=plate,
+                        wells=[],  # Empty means all wells.
+                        wavelength=wavelength_nm,
+                        flashes=flashes,
+                        # Unlike fluorescence, this one is in nm. It must match the installed filter.
+                        bandwidth=optical_filter.bandwidth_nm,
                     )
                 )
             finally:
@@ -181,18 +217,20 @@ class InfiniteDriver:
             self.backend._reset_stream_state()
 
     @staticmethod
-    def _find_filter(filters: list[OpticalFilter], wavelength_nm: int, kind: str) -> OpticalFilter:
-        """Return the fluorescence filter at `wavelength_nm`, or raise FilterNotInstalledError."""
-        for optical_filter in filters:
-            if optical_filter.usage == FLUORESCENCE_USAGE and abs(optical_filter.wavelength_nm - wavelength_nm) < 0.5:
+    def _find_filter(
+        filters: list[OpticalFilter], wavelength_nm: int, kind: str, usage: str | None = FLUORESCENCE_USAGE
+    ) -> OpticalFilter:
+        """Return the filter at `wavelength_nm`, or raise FilterNotInstalledError.
+
+        Only filters labeled with `usage` count; None accepts any label.
+        """
+        candidates = [f for f in filters if usage is None or f.usage == usage]
+        for optical_filter in candidates:
+            if abs(optical_filter.wavelength_nm - wavelength_nm) < 0.5:
                 return optical_filter
 
-        installed = ", ".join(
-            f"{f.wavelength_nm:g}/{f.bandwidth_nm:g}" for f in filters if f.usage == FLUORESCENCE_USAGE
-        )
-        raise FilterNotInstalledError(
-            f"No fluorescence {kind} filter at {wavelength_nm} nm. Installed: {installed or 'none'}."
-        )
+        installed = ", ".join(f"{f.wavelength_nm:g}/{f.bandwidth_nm:g}" for f in candidates)
+        raise FilterNotInstalledError(f"No {kind} filter at {wavelength_nm} nm. Installed: {installed or 'none'}.")
 
     async def _load_filters(self) -> None:
         """Ask the reader which excitation and emission filters are installed.

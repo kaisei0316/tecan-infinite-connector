@@ -17,6 +17,7 @@ monochromator-based M200 PRO, have not been tested.
 | `DrawerController` | `OpenDrawer`, `CloseDrawer`, `DrawerOpen` | Move the plate drawer out or in, and report whether it is open |
 | `InstrumentStatusProvider` | `Connected`, `Busy`, `ExcitationFilters`, `EmissionFilters` | Connection state, whether an operation is running, and the installed filters |
 | `FluorescenceReader` | `ReadFluorescence` | Read fluorescence from the top of all 96 wells and return the value of each well |
+| `AbsorbanceReader` | `ReadAbsorbance` | Read absorbance (OD) of all 96 wells. The wavelength must match an installed excitation filter |
 
 `ReadFluorescence` takes these parameters:
 - excitation and emission wavelength (nm)
@@ -28,7 +29,13 @@ monochromator-based M200 PRO, have not been tested.
 It reports progress while it runs (about 80 s per plate). The wavelengths must match filters that are installed in the
 reader. Any other wavelength is rejected with a `FilterNotInstalled` error before the reader moves.
 
-**Not supported yet:** absorbance and luminescence reads, reading only some wells, and plate types other than standard
+**Absorbance is experimental.** `ReadAbsorbance` is built on pylabrobot's `read_absorbance`, which is written for the
+M series (monochromator). The F200 PRO has filters instead, and this reader lists all four of its excitation filters
+as fluorescence (`FI`) filters. On the reader this was tested on (2026-10-22), the reference measurement failed with
+`ERR30: ReferencChannel: Gain:0, Counts:~50390`, so absorbance reads did not complete. The feature is included
+for other F200 PRO units, for example ones with absorbance filters installed, and has not been verified end to end.
+
+**Not supported yet:** luminescence reads, reading only some wells, and plate types other than standard
 96-well plates.
 
 ## How it is organized

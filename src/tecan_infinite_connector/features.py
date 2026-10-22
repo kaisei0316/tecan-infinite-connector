@@ -35,7 +35,7 @@ MICROSECOND = sila.constraints.Unit(label="us", components=[sila.constraints.Uni
 MILLIMETER = sila.constraints.Unit(label="mm", components=[sila.constraints.UnitComponent(unit="Meter")], factor=1e-3)
 
 ESTIMATED_READ_SECONDS = 85.0
-"""Typical duration of a full 96-well fluorescence read; only used for the progress shown to clients."""
+"""Typical duration of a full 96-well fluorescence or absorbance read; only used for the progress shown to clients."""
 
 
 # Errors clients can receive. The docstring is the error description they see.
@@ -100,6 +100,22 @@ class FluorescenceResult(sila.CustomDataType):
     excitation_wavelength: int
     emission_wavelength: int
     gain: int
+    timestamp: str
+    values: list[WellValue]
+
+
+@dataclasses.dataclass
+class AbsorbanceResult(sila.CustomDataType):
+    """
+    The result of an absorbance plate read.
+
+    Attributes:
+      Wavelength: Wavelength in nm.
+      Timestamp: Completion time of the read (ISO 8601, local time with offset).
+      Values: Absorbance (OD) per well, in row-major order (A1, A2, ..., H12).
+    """
+
+    wavelength: int
     timestamp: str
     values: list[WellValue]
 
@@ -221,8 +237,6 @@ class FluorescenceReader(sila.Feature):
           InstrumentError: The instrument did not respond or reported an error.
         """
 
-        # Run the read in the background so progress can be reported while it runs.
-        # The reader doesn't report progress itself, so it is estimated from elapsed time.
         read = asyncio.create_task(
             self.reader.read_fluorescence(
                 excitation_nm=excitation_wavelength,
@@ -233,14 +247,7 @@ class FluorescenceReader(sila.Feature):
                 focal_height_mm=focal_height,
             )
         )
-        start = time.monotonic()
-        while not read.done():
-            elapsed = time.monotonic() - start
-            status.update(
-                progress=min(elapsed / ESTIMATED_READ_SECONDS, 0.99),
-                remaining_time=datetime.timedelta(seconds=max(ESTIMATED_READ_SECONDS - elapsed, 0)),
-            )
-            await asyncio.wait({read}, timeout=1)
+        await _report_progress_until_done(read, status)
 
         try:
             plate_table = read.result()
@@ -249,19 +256,91 @@ class FluorescenceReader(sila.Feature):
         except Exception as error:
             raise InstrumentError(f"Fluorescence read failed: {error!r}") from error
 
-        values = [
-            WellValue(well=f"{driver.ROWS[row]}{column + 1}", value=float(value))
-            for row, row_values in enumerate(plate_table)
-            for column, value in enumerate(row_values)
-            if value is not None
-        ]
         return FluorescenceResult(
             excitation_wavelength=excitation_wavelength,
             emission_wavelength=emission_wavelength,
             gain=gain,
-            timestamp=datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-            values=values,
+            timestamp=_now(),
+            values=_to_well_values(plate_table),
         )
+
+
+class AbsorbanceReader(sila.Feature):
+    """
+    Absorbance reads of a 96-well plate on the Tecan Infinite 200 PRO.
+
+    This reader has filters instead of a monochromator, so the wavelength must match
+    an installed excitation filter (see InstrumentStatusProvider); the filter
+    bandwidth is taken from the installed filter.
+    """
+
+    def __init__(self, reader: InfiniteDriver):
+        super().__init__(originator=ORIGINATOR, category=CATEGORY, version="1.0", maturity_level="Draft")
+        self.reader = reader
+
+    @sila.ObservableCommand()
+    async def read_absorbance(
+        self,
+        wavelength: typing.Annotated[int, NANOMETER],
+        flashes: typing.Annotated[int, sila.constraints.MinimalInclusive(1), sila.constraints.MaximalInclusive(100)],
+        *,
+        status: sila.Status,
+    ) -> AbsorbanceResult:
+        """
+        Read the absorbance of all 96 wells of the plate in the reader.
+
+        Args:
+          Wavelength: Wavelength in nm; must match an installed excitation filter.
+          Flashes: Number of flashes per well.
+
+        Returns:
+          Result: The measured absorbance (OD) for each well.
+
+        Raises:
+          FilterNotInstalled: No installed filter matches the requested wavelength.
+          InstrumentError: The instrument did not respond or reported an error.
+        """
+
+        read = asyncio.create_task(self.reader.read_absorbance(wavelength_nm=wavelength, flashes=flashes))
+        await _report_progress_until_done(read, status)
+
+        try:
+            plate_table = read.result()
+        except driver.FilterNotInstalledError as error:
+            raise FilterNotInstalled(str(error)) from error
+        except Exception as error:
+            raise InstrumentError(f"Absorbance read failed: {error!r}") from error
+
+        return AbsorbanceResult(wavelength=wavelength, timestamp=_now(), values=_to_well_values(plate_table))
+
+
+async def _report_progress_until_done(read: asyncio.Task, status: sila.Status) -> None:
+    """Report progress to the client until `read` finishes.
+
+    The reader doesn't report progress itself, so it is estimated from elapsed time.
+    """
+    start = time.monotonic()
+    while not read.done():
+        elapsed = time.monotonic() - start
+        status.update(
+            progress=min(elapsed / ESTIMATED_READ_SECONDS, 0.99),
+            remaining_time=datetime.timedelta(seconds=max(ESTIMATED_READ_SECONDS - elapsed, 0)),
+        )
+        await asyncio.wait({read}, timeout=1)
+
+
+def _now() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _to_well_values(plate_table: list[list[float | None]]) -> list[WellValue]:
+    """Flatten an 8 x 12 table into one value per well, skipping wells that were not measured."""
+    return [
+        WellValue(well=f"{driver.ROWS[row]}{column + 1}", value=float(value))
+        for row, row_values in enumerate(plate_table)
+        for column, value in enumerate(row_values)
+        if value is not None
+    ]
 
 
 def _to_sila_filter(optical_filter: driver.OpticalFilter) -> OpticalFilter:
